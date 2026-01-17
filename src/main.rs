@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    io::{self, Read},
+};
 
 use nom::{
     IResult, Parser,
@@ -7,6 +10,7 @@ use nom::{
     combinator::{all_consuming, opt},
     multi::{count, separated_list1},
 };
+
 use z3::{
     Solver,
     ast::{Ast, Int},
@@ -24,9 +28,15 @@ use z3::{
 /// |a8|b8|c8|d8|e8|f8|g8|h8|i8|
 /// +--------------------------+
 fn main() {
-    let input = include_str!("input.txt");
+    let mut input = String::new();
 
-    let (_, mut puzzle) = all_consuming(parse).parse(input).expect("should parse");
+    io::stdin()
+        .read_to_string(&mut input)
+        .expect("Failed to read input");
+
+    let (_, mut puzzle) = all_consuming(parse)
+        .parse(input.as_str())
+        .expect("should parse");
 
     println!("{puzzle}");
 

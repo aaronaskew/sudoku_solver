@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 nom = "8.0.0"
-z3 = "0.19.7"
+z3 = { version = "0.19.7", features = ["gh-release"] }
