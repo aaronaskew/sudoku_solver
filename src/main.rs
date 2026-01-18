@@ -1,6 +1,6 @@
 use std::{
-    collections::{BTreeMap, HashMap},
-    io::{self, Read},
+    collections::{BTreeMap, HashMap, HashSet},
+    io::{self, Write},
 };
 
 use nom::{
@@ -16,34 +16,222 @@ use z3::{
     ast::{Ast, Int},
 };
 
-/// +--------------------------+
-/// |a0|b0|c0|d0|e0|f0|g0|h0|i0|
-/// |a1|b1|c1|d1|e1|f1|g1|h1|i1|
-/// |a2|b2|c2|d2|e2|f2|g2|h2|i2|
-/// |a3|b3|c3|d3|e3|f3|g3|h3|i3|
-/// |a4|b4|c4|d4|e4|f4|g4|h4|i4|
-/// |a5|b5|c5|d5|e5|f5|g5|h5|i5|
-/// |a6|b6|c6|d6|e6|f6|g6|h6|i6|
-/// |a7|b7|c7|d7|e7|f7|g7|h7|i7|
-/// |a8|b8|c8|d8|e8|f8|g8|h8|i8|
-/// +--------------------------+
-fn main() {
-    let mut input = String::new();
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyEvent},
+    execute, queue,
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor, Stylize},
+    terminal::{self, ClearType},
+};
 
-    io::stdin()
-        .read_to_string(&mut input)
-        .expect("Failed to read input");
+struct SudokuInput {
+    grid: [[Option<u8>; 9]; 9],
+    cursor_row: usize,
+    cursor_col: usize,
+}
 
-    let (_, mut puzzle) = all_consuming(parse)
-        .parse(input.as_str())
-        .expect("should parse");
+impl SudokuInput {
+    fn new() -> Self {
+        Self {
+            grid: [[None; 9]; 9],
+            cursor_row: 0,
+            cursor_col: 0,
+        }
+    }
+
+    fn display(&self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+
+        queue!(
+            stdout,
+            terminal::Clear(ClearType::All),
+            cursor::MoveTo(0, 0)
+        )?;
+
+        queue!(
+            stdout,
+            Print("╔═══════════════════════════╗\r\n"),
+            Print("║   SUDOKU PUZZLE INPUT     ║\r\n"),
+            Print("╚═══════════════════════════╝\r\n\r\n"),
+        )?;
+
+        queue!(stdout, Print("  A B C   D E F   G H I\r\n"))?;
+        queue!(stdout, Print("┌───────┬───────┬───────┐\r\n"))?;
+
+        for row in 0..9 {
+            if row == 3 || row == 6 {
+                queue!(stdout, Print("├───────┼───────┼───────┤\r\n"))?;
+            }
+
+            queue!(stdout, Print("│ "))?;
+
+            for col in 0..9 {
+                if col == 3 || col == 6 {
+                    queue!(stdout, Print("│ "))?;
+                }
+
+                // Highlight cursor position
+                if row == self.cursor_row && col == self.cursor_col {
+                    queue!(
+                        stdout,
+                        SetBackgroundColor(Color::White),
+                        SetForegroundColor(Color::Black)
+                    )?;
+                }
+
+                match self.grid[row][col] {
+                    Some(n) => queue!(stdout, Print(n))?,
+                    None => queue!(stdout, Print('.'))?,
+                }
+
+                if row == self.cursor_row && col == self.cursor_col {
+                    queue!(stdout, ResetColor)?;
+                }
+
+                queue!(stdout, Print(' '))?;
+            }
+
+            queue!(stdout, Print(format!("│ {}\r\n", row)))?;
+        }
+
+        queue!(stdout, Print("└───────┴───────┴───────┘\r\n\r\n"))?;
+
+        queue!(
+            stdout,
+            Print("Controls:\r\n"),
+            Print("  Arrow Keys / WASD: Move cursor\r\n"),
+            Print("  1-9: Enter number\r\n"),
+            Print("  0 / Space / Backspace: Clear cell\r\n"),
+            Print("  Q / Esc: Quit and show result\r\n"),
+            Print("  R: Reset grid\r\n"),
+            Print(format!(
+                "\r\nCursor: Row {}, Col {}\r\n",
+                (b'A' + self.cursor_row as u8) as char,
+                self.cursor_col + 1
+            )),
+        )?;
+
+        stdout.flush()?;
+        Ok(())
+    }
+
+    fn move_cursor(&mut self, dr: i32, dc: i32) {
+        let new_row = (self.cursor_row as i32 + dr).rem_euclid(9) as usize;
+        let new_col = (self.cursor_col as i32 + dc).rem_euclid(9) as usize;
+        self.cursor_row = new_row;
+        self.cursor_col = new_col;
+    }
+
+    fn set_value(&mut self, val: Option<u8>) {
+        self.grid[self.cursor_row][self.cursor_col] = val;
+    }
+
+    fn reset(&mut self) {
+        self.grid = [[None; 9]; 9];
+    }
+
+    fn to_array(&self) -> [[u8; 9]; 9] {
+        let mut result = [[0u8; 9]; 9];
+        for (row, result_row) in result.iter_mut().enumerate() {
+            for (col, result_cell) in result_row.iter_mut().enumerate() {
+                *result_cell = self.grid[row][col].unwrap_or(0);
+            }
+        }
+        result
+    }
+}
+
+fn run() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    terminal::enable_raw_mode()?;
+    execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
+
+    let mut sudoku = SudokuInput::new();
+    let mut quit = false;
+
+    while !quit {
+        sudoku.display()?;
+
+        if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+            match code {
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                    quit = true;
+                }
+                KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') => {
+                    sudoku.move_cursor(-1, 0);
+                }
+                KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('S') => {
+                    sudoku.move_cursor(1, 0);
+                }
+                KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') => {
+                    sudoku.move_cursor(0, -1);
+                }
+                KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('D') => {
+                    sudoku.move_cursor(0, 1);
+                }
+                KeyCode::Char('1') => sudoku.set_value(Some(1)),
+                KeyCode::Char('2') => sudoku.set_value(Some(2)),
+                KeyCode::Char('3') => sudoku.set_value(Some(3)),
+                KeyCode::Char('4') => sudoku.set_value(Some(4)),
+                KeyCode::Char('5') => sudoku.set_value(Some(5)),
+                KeyCode::Char('6') => sudoku.set_value(Some(6)),
+                KeyCode::Char('7') => sudoku.set_value(Some(7)),
+                KeyCode::Char('8') => sudoku.set_value(Some(8)),
+                KeyCode::Char('9') => sudoku.set_value(Some(9)),
+                KeyCode::Char('0') | KeyCode::Char(' ') | KeyCode::Backspace | KeyCode::Delete => {
+                    sudoku.set_value(None);
+                }
+                KeyCode::Char('r') | KeyCode::Char('R') => {
+                    sudoku.reset();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Cleanup
+    execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
+    terminal::disable_raw_mode()?;
+
+    // // Show final grid
+    // println!("\nFinal Sudoku Grid (0 = empty):");
+    // let grid = sudoku.to_array();
+    // for row in grid.iter() {
+    //     println!("{:?}", row);
+    // }
+
+    let mut puzzle = Puzzle::from_array(&sudoku.to_array());
 
     println!("{puzzle}");
 
     puzzle.solve();
+
+    Ok(())
 }
 
-fn parse(input: &str) -> IResult<&str, Puzzle> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+    }
+}
+
+// fn main() {
+//     let mut input = String::new();
+
+//     io::stdin()
+//         .read_to_string(&mut input)
+//         .expect("Failed to read input");
+
+//     let (_, mut puzzle) = all_consuming(parse)
+//         .parse(input.as_str())
+//         .expect("should parse");
+
+//     println!("{puzzle}");
+
+//     puzzle.solve();
+// }
+
+fn _parse(input: &str) -> IResult<&str, Puzzle> {
     let (input, (rows, _)) = all_consuming((
         separated_list1(line_ending, count(take(1usize), 9)),
         opt(line_ending),
@@ -57,7 +245,7 @@ fn parse(input: &str) -> IResult<&str, Puzzle> {
         row.iter().for_each(|s| assert!(s.len() == 1));
     });
 
-    let data = rows
+    let data: BTreeMap<String, Option<u8>> = rows
         .iter()
         .enumerate()
         .flat_map(|(j, row)| {
@@ -93,12 +281,19 @@ fn parse(input: &str) -> IResult<&str, Puzzle> {
         })
         .collect();
 
-    Ok((input, Puzzle { data }))
+    Ok((
+        input,
+        Puzzle {
+            data: data.clone(),
+            initial_cells: data.keys().cloned().collect(),
+        },
+    ))
 }
 
 #[derive(Debug)]
 struct Puzzle {
     data: BTreeMap<String, Option<u8>>,
+    initial_cells: HashSet<String>,
 }
 
 impl std::fmt::Display for Puzzle {
@@ -127,9 +322,15 @@ impl std::fmt::Display for Puzzle {
                     f,
                     " {} |",
                     if let Some(v) = self.data.get(&key).unwrap() {
-                        (v + b'0') as char
+                        let num_string = String::from((v + b'0') as char);
+
+                        if self.initial_cells.contains(&key) {
+                            num_string.stylize()
+                        } else {
+                            num_string.blue().bold()
+                        }
                     } else {
-                        ' '
+                        " ".to_string().stylize()
                     }
                 )?;
             }
@@ -142,6 +343,73 @@ impl std::fmt::Display for Puzzle {
 }
 
 impl Puzzle {
+    fn from_array(data: &[[u8; 9]; 9]) -> Self {
+        let initial_cells = data
+            .iter()
+            .enumerate()
+            .flat_map(|(j, row)| {
+                row.iter().enumerate().filter_map(move |(i, value)| {
+                    if matches!(value, 1..=9) {
+                        Some(format!(
+                            "{}{}",
+                            match i {
+                                0 => 'a',
+                                1 => 'b',
+                                2 => 'c',
+                                3 => 'd',
+                                4 => 'e',
+                                5 => 'f',
+                                6 => 'g',
+                                7 => 'h',
+                                8 => 'i',
+                                _ => panic!("more than 9 columns"),
+                            },
+                            (b'0' + j as u8) as char,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        Self {
+            data: data
+                .iter()
+                .enumerate()
+                .flat_map(|(j, row)| {
+                    row.iter().enumerate().map(move |(i, value)| {
+                        let key = format!(
+                            "{}{}",
+                            match i {
+                                0 => 'a',
+                                1 => 'b',
+                                2 => 'c',
+                                3 => 'd',
+                                4 => 'e',
+                                5 => 'f',
+                                6 => 'g',
+                                7 => 'h',
+                                8 => 'i',
+                                _ => panic!("more than 9 columns"),
+                            },
+                            (b'0' + j as u8) as char,
+                        );
+
+                        (
+                            key,
+                            match value {
+                                1..=9 => Some(*value),
+                                _ => None,
+                            },
+                        )
+                    })
+                })
+                .collect(),
+            initial_cells,
+        }
+    }
+
     fn solve(&mut self) {
         let solver = Solver::new();
 
